@@ -83,7 +83,7 @@
   "imports": {
     "react": "https://esm.sh/react@18.2.0",
     "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-    "lucide-react": "https://esm.sh/lucide-react@0.344.0",
+    "lucide-react": "https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0",
     "react-markdown": "https://esm.sh/react-markdown@9.0.1?deps=react@18.2.0",
     "uuid": "https://esm.sh/uuid@9.0.1",
     "@google/genai": "https://esm.sh/@google/genai",
@@ -104,66 +104,23 @@
         Image as ImageIcon, GraduationCap, BookOpen, PenTool, 
         Sparkles, AlertTriangle, Check, RefreshCw, Trash2, Paperclip, X,
         Menu, LogOut, MessageSquare, Plus, Settings, ChevronDown, UserCircle,
-        BrainCircuit, Play, HelpCircle, ArrowRight, RotateCcw
+        BrainCircuit, Play, HelpCircle, ArrowRight, RotateCcw, Download,
+        Palette
       } from 'lucide-react';
       import ReactMarkdown from 'react-markdown';
       import { v4 as uuidv4 } from 'uuid';
       import { GoogleGenAI } from '@google/genai';
 
       // --- CONFIGURATION ---
-      // Primary and Backup API Keys
-      const API_KEYS = [
-        "AIzaSyBx3AsRaRaKNQzmAQjecPjPVFoDFC3XAeE", // Primary
-        "AIzaSyD12-IaCr9ZUy3154etS5q72SVqrDsf49Y"  // Backup
-      ];
+      // Primary API Key
+      const API_KEY = "AIzaSyCqSoTa0HkUCvA6pU36kqnY1Y5lW2AFbEs";
       
-      let currentKeyIndex = 0;
-      let ai = new GoogleGenAI({ apiKey: API_KEYS[0] });
-
-      // --- KEY ROTATION LOGIC ---
-      const rotateApiKey = () => {
-        currentKeyIndex = (currentKeyIndex + 1) % API_KEYS.length;
-        console.warn(`⚠️ API Quota Exceeded (429). Switching to API Key #${currentKeyIndex + 1}...`);
-        ai = new GoogleGenAI({ apiKey: API_KEYS[currentKeyIndex] });
-      };
+      let ai = new GoogleGenAI({ apiKey: API_KEY });
 
       const isRateLimitError = (error) => {
         const msg = error?.message || '';
         const status = error?.status;
         return msg.includes('429') || status === 429 || msg.includes('Quota exceeded') || msg.includes('RESOURCE_EXHAUSTED');
-      };
-
-      // --- TYPES & CONSTANTS ---
-      const Role = {
-        USER: 'user',
-        MODEL: 'model'
-      };
-
-      const STORAGE_KEYS = {
-        CHATS: 'yai_chats_v2',
-        SETTINGS: 'yai_settings_v2'
-      };
-
-      // --- HELPER TO RESTORE HISTORY FOR ROTATION ---
-      const getHistoryFromMessages = (messages) => {
-        return messages
-          .filter(m => !m.isError && !m.isStreaming && m.role !== 'system') // Filter invalid
-          .map(m => {
-            const parts = [{ text: m.content }];
-            // If we had image support stored in history, we'd add it here.
-            // For now, we mainly restore text context to keep the conversation going.
-            if (m.image) {
-                // If the image data is available in the message object
-                const base64 = m.image.split(',')[1];
-                if (base64) {
-                    parts.push({ inlineData: { mimeType: 'image/jpeg', data: base64 } });
-                }
-            }
-            return {
-              role: m.role,
-              parts: parts
-            };
-          });
       };
 
       // --- GEMINI SERVICE ---
@@ -232,24 +189,11 @@
           - **FORCED ERRORS**: If the user has errors, replicate them.
         `;
 
-        try {
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: prompt,
-            });
-            return response.text;
-        } catch (error) {
-            if (isRateLimitError(error)) {
-                rotateApiKey();
-                // Retry once
-                const response = await ai.models.generateContent({
-                    model: 'gemini-2.5-flash',
-                    contents: prompt,
-                });
-                return response.text;
-            }
-            throw error;
-        }
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+        });
+        return response.text;
       };
 
       const createCustomSession = (styleProfile, grade, history = []) => {
@@ -286,17 +230,21 @@
         const prompt = `
           You are a Quiz Generator for a Grade ${grade} student.
           
-          TOPIC/CONTEXT:
+          USER REQUEST/TOPIC:
           "${topic}"
 
           ${weakAreas ? `FOCUS ON THESE WEAK AREAS: ${weakAreas}` : ''}
 
           INSTRUCTIONS:
-          1. Parse the topic. If it's raw notes (e.g., "grass green, rocks erode"), reword them into high-quality multiple choice questions.
-          2. If it's a general topic (e.g., "Lawyer"), generate 5 relevant aptitude or knowledge questions.
-          3. Generate EXACTLY 5 questions.
-          4. For each question, provide 4 options (1 correct, 3 distractors).
-          5. Provide a short "explanation" for why the correct answer is right.
+          1. **QUANTITY CHECK**: Look for any number in the user's request (e.g., "10 questions", "make me 3", "20"). 
+             - If a number is found, generate EXACTLY that many questions.
+             - If NO number is found, default to exactly 5 questions.
+          2. **CONTENT**: 
+             - If input is raw notes, reword them into multiple-choice questions.
+             - If input is a general topic (e.g. "Lawyer"), generate aptitude/knowledge questions.
+          3. **FORMAT**:
+             - Provide 4 options per question (1 correct, 3 distractors).
+             - Provide a short "explanation" for the correct answer.
 
           OUTPUT FORMAT:
           Return ONLY a raw JSON array. Do not use Markdown code blocks.
@@ -310,26 +258,14 @@
           ]
         `;
 
-        const execute = async () => {
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash',
-                contents: prompt,
-            });
-            let text = response.text.trim();
-            if (text.startsWith('```json')) text = text.replace(/^```json/, '').replace(/```$/, '');
-            if (text.startsWith('```')) text = text.replace(/^```/, '').replace(/```$/, '');
-            return JSON.parse(text);
-        };
-
-        try {
-            return await execute();
-        } catch (error) {
-            if (isRateLimitError(error)) {
-                rotateApiKey();
-                return await execute();
-            }
-            throw error;
-        }
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+        });
+        let text = response.text.trim();
+        if (text.startsWith('```json')) text = text.replace(/^```json/, '').replace(/```$/, '');
+        if (text.startsWith('```')) text = text.replace(/^```/, '').replace(/```$/, '');
+        return JSON.parse(text);
       };
 
       const sendMessageStream = async (chat, messageText, imageData = null) => {
@@ -361,7 +297,7 @@
 
       // MessageBubble
       const MessageBubble = ({ message }) => {
-        const isUser = message.role === Role.USER;
+        const isUser = message.role === 'user';
         const isError = message.isError;
 
         return (
@@ -575,31 +511,32 @@
             setQuizData(data);
             setCurrentIndex(0);
             setScore(0);
+            setShowExplanation(false);
+            setSelectedAnswer(null);
             setHistory([]);
             setStep('quiz');
-          } catch (e) {
-            console.error(e);
-            alert("Failed to generate quiz (Quota may be exceeded). Try again in a moment.");
+          } catch (error) {
+            console.error(error);
             setStep('input');
+            alert("Failed to generate quiz. Please try again.");
           }
         };
 
         const handleAnswer = (index) => {
-          if (selectedAnswer !== null) return;
           setSelectedAnswer(index);
-          const currentQ = quizData[currentIndex];
-          const isCorrect = index === currentQ.correctAnswerIndex;
-          
+          setShowExplanation(true);
+          const isCorrect = index === quizData[currentIndex].correctAnswerIndex;
           if (isCorrect) setScore(s => s + 1);
-          
-          setHistory(prev => [...prev, { ...currentQ, userCorrect: isCorrect }]);
+          else {
+            setHistory(h => [...h, quizData[currentIndex].question]);
+          }
         };
 
         const nextQuestion = () => {
-          setSelectedAnswer(null);
-          setShowExplanation(false);
           if (currentIndex < quizData.length - 1) {
             setCurrentIndex(c => c + 1);
+            setSelectedAnswer(null);
+            setShowExplanation(false);
           } else {
             setStep('results');
           }
@@ -607,29 +544,28 @@
 
         if (step === 'input') {
           return (
-            <div className="max-w-2xl mx-auto p-6 flex flex-col items-center justify-center h-full">
-              <div className="bg-gradient-to-br from-brand-600 to-blue-600 p-4 rounded-2xl mb-6 shadow-lg shadow-brand-900/50">
-                 <BrainCircuit className="text-white w-12 h-12" />
+            <div className="max-w-2xl mx-auto p-6 md:p-12">
+              <div className="text-center mb-8">
+                <div className="inline-flex items-center justify-center p-3 bg-indigo-600 rounded-2xl mb-4 shadow-lg shadow-indigo-900/40">
+                  <BrainCircuit className="text-white h-8 w-8" />
+                </div>
+                <h2 className="text-3xl font-bold text-gray-100 mb-2">Quiz Generator</h2>
+                <p className="text-gray-400">Paste your notes, a topic, or what you want to be (e.g., "Lawyer"). YAI will create a custom quiz for you.</p>
               </div>
-              <h2 className="text-3xl font-bold text-white mb-2">Quiz Mode</h2>
-              <p className="text-gray-400 text-center mb-8">
-                Paste your notes, ask for a topic (e.g., "Civil War"), or enter rough questions. 
-                YAI will auto-generate a structured quiz.
-              </p>
-              
-              <textarea
-                value={inputTopic}
-                onChange={(e) => setInputTopic(e.target.value)}
-                placeholder="e.g. 'Make me a quiz on photosynthesis' or paste your biology notes..."
-                className="w-full h-40 bg-gray-900 border border-gray-800 rounded-xl p-4 text-gray-200 focus:ring-2 focus:ring-brand-500 outline-none resize-none mb-6"
-              />
-              
+              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl mb-6">
+                 <textarea
+                    value={inputTopic}
+                    onChange={(e) => setInputTopic(e.target.value)}
+                    placeholder="E.g., 'Grass is green, rocks erode' or 'Make me a quiz on 8th grade Biology'..."
+                    className="w-full h-40 bg-gray-950 border border-gray-800 rounded-xl p-4 text-gray-200 focus:ring-2 focus:ring-indigo-500/50 outline-none resize-none"
+                 />
+              </div>
               <button
                 onClick={() => handleGenerate(inputTopic)}
                 disabled={!inputTopic.trim()}
-                className="w-full bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-4 rounded-xl transition-all flex items-center justify-center gap-2 shadow-lg"
+                className="w-full py-4 rounded-xl font-bold text-lg bg-brand-600 hover:bg-brand-500 text-white shadow-lg transition-transform hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Play size={20} fill="currentColor" /> Generate Quiz
+                Generate Quiz
               </button>
             </div>
           );
@@ -638,517 +574,543 @@
         if (step === 'loading') {
           return (
             <div className="flex flex-col items-center justify-center h-full">
-               <div className="relative">
-                 <div className="w-24 h-24 bg-brand-500/20 rounded-full animate-ping absolute"></div>
-                 <BrainCircuit className="text-brand-400 w-24 h-24 animate-pulse relative z-10" />
-               </div>
-               <h3 className="text-xl font-bold text-white mt-8 mb-2">Building Your Quiz...</h3>
-               <p className="text-brand-300 text-sm animate-bounce-slight">Rewording questions & generating distractors</p>
-            </div>
-          );
-        }
-
-        if (step === 'quiz') {
-          const q = quizData[currentIndex];
-          const isAnswered = selectedAnswer !== null;
-          const isCorrect = selectedAnswer === q.correctAnswerIndex;
-
-          return (
-            <div className="max-w-2xl mx-auto p-6 h-full flex flex-col">
-               <div className="flex justify-between items-center mb-6 text-sm text-gray-400">
-                  <span>Question {currentIndex + 1} of {quizData.length}</span>
-                  <span className="bg-gray-800 px-3 py-1 rounded-full text-brand-300 font-mono">Score: {score}</span>
-               </div>
-
-               <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 md:p-8 shadow-xl flex-1 flex flex-col">
-                  <h3 className="text-xl md:text-2xl font-bold text-white mb-8 leading-relaxed">{q.question}</h3>
-                  
-                  <div className="grid grid-cols-1 gap-4 mb-auto">
-                     {q.options.map((opt, idx) => {
-                        let btnClass = "p-4 rounded-xl text-left border transition-all text-sm md:text-base font-medium ";
-                        if (!isAnswered) {
-                           btnClass += "bg-gray-800 border-gray-700 hover:bg-gray-750 text-gray-200";
-                        } else {
-                           if (idx === q.correctAnswerIndex) {
-                              btnClass += "bg-green-900/40 border-green-500 text-green-100"; // Correct
-                           } else if (idx === selectedAnswer) {
-                              btnClass += "bg-red-900/40 border-red-500 text-red-100"; // Wrong selected
-                           } else {
-                              btnClass += "bg-gray-800/50 border-gray-800 text-gray-500 opacity-50"; // Others
-                           }
-                        }
-
-                        return (
-                          <button 
-                            key={idx} 
-                            onClick={() => handleAnswer(idx)}
-                            disabled={isAnswered}
-                            className={btnClass}
-                          >
-                             <div className="flex items-center gap-3">
-                                <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs border ${
-                                   isAnswered && idx === q.correctAnswerIndex ? 'border-green-400 text-green-400' : 'border-gray-600 text-gray-500'
-                                }`}>
-                                   {String.fromCharCode(65 + idx)}
-                                </span>
-                                {opt}
-                             </div>
-                          </button>
-                        )
-                     })}
-                  </div>
-
-                  {isAnswered && (
-                     <div className="mt-6 pt-6 border-t border-gray-800 animate-[fadeIn_0.3s_ease-out]">
-                        <div className="flex items-center justify-between mb-4">
-                           <span className={`font-bold ${isCorrect ? 'text-green-400' : 'text-red-400'}`}>
-                              {isCorrect ? "Correct! 🎉" : "Incorrect"}
-                           </span>
-                           {!showExplanation && (
-                              <button onClick={() => setShowExplanation(true)} className="text-xs text-brand-400 hover:text-brand-300 flex items-center gap-1">
-                                 <HelpCircle size={14}/> Why?
-                              </button>
-                           )}
-                        </div>
-                        
-                        {showExplanation && (
-                           <div className="bg-gray-950/50 p-4 rounded-lg mb-4 text-sm text-gray-300 border border-gray-800">
-                              <span className="text-brand-400 font-bold block mb-1">Explanation:</span>
-                              {q.explanation}
-                           </div>
-                        )}
-
-                        <button onClick={nextQuestion} className="w-full bg-brand-600 hover:bg-brand-500 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2">
-                           {currentIndex < quizData.length - 1 ? "Next Question" : "See Results"} <ArrowRight size={18}/>
-                        </button>
-                     </div>
-                  )}
-               </div>
+              <div className="relative">
+                <BrainCircuit size={64} className="text-brand-500 animate-pulse" />
+                <div className="absolute inset-0 bg-brand-500/20 blur-xl rounded-full animate-pulse-slow"></div>
+              </div>
+              <p className="mt-6 text-xl font-bold text-gray-200 animate-bounce-slight">Building your Quiz...</p>
+              <p className="text-sm text-gray-500 mt-2">Rewording questions & creating distractors</p>
             </div>
           );
         }
 
         if (step === 'results') {
-           const percentage = Math.round((score / quizData.length) * 100);
-           const weakAreas = history.filter(h => !h.userCorrect).map(h => h.question).join("; ");
-
-           return (
-              <div className="max-w-md mx-auto p-6 flex flex-col items-center justify-center h-full text-center">
-                 <div className="w-32 h-32 rounded-full border-4 border-gray-800 flex items-center justify-center mb-6 relative">
-                    <div className="text-4xl font-bold text-white">{percentage}%</div>
-                    <svg className="absolute inset-0 w-full h-full -rotate-90" viewBox="0 0 36 36">
-                       <path className="text-gray-800" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="2" />
-                       <path className="text-brand-500" strokeDasharray={`${percentage}, 100`} d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" fill="none" stroke="currentColor" strokeWidth="2" />
-                    </svg>
-                 </div>
-                 
-                 <h2 className="text-2xl font-bold text-white mb-2">Quiz Complete!</h2>
-                 <p className="text-gray-400 mb-8">You got {score} out of {quizData.length} correct.</p>
-
-                 <div className="w-full space-y-3">
-                    {percentage < 100 && (
-                        <button 
-                           onClick={() => handleGenerate(inputTopic, weakAreas)}
-                           className="w-full bg-brand-600 hover:bg-brand-500 text-white font-bold py-3 rounded-xl flex items-center justify-center gap-2"
-                        >
-                           <RotateCcw size={18}/> Practice Weaknesses
-                        </button>
-                    )}
-                    <button 
-                       onClick={() => { setStep('input'); setInputTopic(''); }}
-                       className="w-full bg-gray-800 hover:bg-gray-700 text-white font-medium py-3 rounded-xl border border-gray-700"
+          return (
+            <div className="max-w-md mx-auto p-8 text-center h-full flex flex-col justify-center">
+               <h2 className="text-4xl font-bold text-white mb-2">Quiz Complete!</h2>
+               <div className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-brand-400 to-indigo-400 my-6">
+                 {score}/{quizData.length}
+               </div>
+               <p className="text-gray-400 mb-8">
+                 {score === quizData.length ? "Perfect Score! You're a genius! 🌟" : "Good effort! Keep practicing."}
+               </p>
+               
+               <div className="space-y-3">
+                 {score < quizData.length && (
+                    <button
+                        onClick={() => handleGenerate(inputTopic, history.join(', '))}
+                        className="w-full py-3 rounded-xl font-bold bg-indigo-600 hover:bg-indigo-500 text-white"
                     >
-                       New Topic
+                        Practice Weaknesses
                     </button>
-                 </div>
-              </div>
-           );
+                 )}
+                 <button
+                    onClick={() => { setStep('input'); setInputTopic(''); }}
+                    className="w-full py-3 rounded-xl font-bold bg-gray-800 hover:bg-gray-700 text-gray-300"
+                 >
+                    New Quiz
+                 </button>
+               </div>
+            </div>
+          );
         }
-      };
 
-      // Sidebar
-      const Sidebar = ({ isOpen, onClose, chats, activeChatId, onSelectChat, onNewChat, activeView }) => {
-        // Filter chats based on view (Essay vs Homework) - Quiz doesn't have history in this version
-        const visibleChats = chats.filter(c => c.mode === activeView);
-
+        // Quiz Step
+        const question = quizData[currentIndex];
         return (
-          <>
-            {isOpen && <div className="fixed inset-0 bg-black/50 z-30 md:hidden" onClick={onClose} />}
-            <div className={`fixed inset-y-0 left-0 w-64 bg-[#0d1117] border-r border-gray-800 transform transition-transform duration-300 z-40 flex flex-col ${isOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
-              <div className="p-4 border-b border-gray-800 flex items-center gap-3">
-                 <div className="bg-gradient-to-br from-brand-600 to-blue-600 p-1.5 rounded-lg">
-                    <GraduationCap className="text-white h-5 w-5" />
-                 </div>
-                 <h1 className="font-bold text-white tracking-wide">YAI</h1>
-                 <button onClick={onClose} className="ml-auto md:hidden text-gray-400"><X size={20}/></button>
-              </div>
-
-              <div className="p-4">
-                <button onClick={onNewChat} className="w-full bg-brand-600 hover:bg-brand-500 text-white py-2.5 px-4 rounded-xl flex items-center justify-center gap-2 font-medium transition-all shadow-lg shadow-brand-900/20">
-                  <Plus size={18} /> New Chat
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto custom-scrollbar px-3 py-2 space-y-1">
-                <p className="text-xs font-semibold text-gray-500 px-3 mb-2 uppercase tracking-wider">{activeView} Chats</p>
-                {visibleChats.length === 0 && (
-                  <div className="text-center py-8 text-gray-600 text-sm">No chats yet</div>
-                )}
-                {visibleChats.map(chat => (
-                  <button
-                    key={chat.id}
-                    onClick={() => onSelectChat(chat.id)}
-                    className={`w-full text-left px-3 py-2.5 rounded-lg text-sm truncate flex items-center gap-2 transition-colors ${
-                      activeChatId === chat.id 
-                        ? 'bg-gray-800 text-white border border-gray-700' 
-                        : 'text-gray-400 hover:bg-gray-800/50 hover:text-gray-200'
-                    }`}
-                  >
-                    <MessageSquare size={14} className={activeChatId === chat.id ? "text-brand-400" : "text-gray-500"} />
-                    <span className="truncate">{chat.title || "New Conversation"}</span>
-                  </button>
-                ))}
-              </div>
+          <div className="max-w-2xl mx-auto p-4 md:p-8 flex flex-col h-full justify-center">
+            <div className="mb-6 flex justify-between items-center text-gray-500 text-sm font-medium">
+               <span>Question {currentIndex + 1} of {quizData.length}</span>
+               <span className="bg-gray-800 px-3 py-1 rounded-full">Score: {score}</span>
             </div>
-          </>
-        );
-      };
 
-      // App Layout & Logic
-      const App = () => {
-        // User State (Simplified - Guest Mode Only)
-        const [user] = useState({ name: "Student", avatar: null }); 
-        
-        const [viewMode, setViewMode] = useState('homework');
-        const [grade, setGrade] = useState('8'); // Default 8th Grade
-        const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-        
-        // Chat Data
-        const [chats, setChats] = useState([]);
-        const [activeChatId, setActiveChatId] = useState(null);
-        const [messages, setMessages] = useState([]);
-        const [isProcessing, setIsProcessing] = useState(false);
-        const [selectedStyle, setSelectedStyle] = useState('simple'); // for homework
+            <h3 className="text-2xl font-bold text-white mb-8 leading-snug">{question.question}</h3>
 
-        // Refs
-        const chatSessionRef = useRef(null);
-        const messagesEndRef = useRef(null);
-
-        // Load Initial Data
-        useEffect(() => {
-          const storedChats = localStorage.getItem(STORAGE_KEYS.CHATS);
-          if (storedChats) setChats(JSON.parse(storedChats));
-        }, []);
-
-        // Save chats when changed
-        useEffect(() => {
-          if (chats.length > 0) {
-            localStorage.setItem(STORAGE_KEYS.CHATS, JSON.stringify(chats));
-          }
-        }, [chats]);
-
-        // Scroll to bottom
-        useEffect(() => { messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, isProcessing]);
-
-        const createNewChat = (mode = null) => {
-          const targetMode = mode || viewMode;
-          // If in Quiz mode, create new chat defaults to homework
-          const finalMode = targetMode === 'quiz' ? 'homework' : targetMode;
-          if (targetMode === 'quiz') setViewMode('homework');
-
-          const newId = uuidv4();
-          const welcomeMsg = finalMode === 'homework' 
-            ? `Hi! I'm YAI. \n\nI'm set to **Grade ${grade}** level. How can I help you study today?`
-            : "Let's work on your writing. Paste a sample of your text to get started.";
-            
-          const newChat = {
-            id: newId,
-            title: "New Conversation",
-            messages: [{
-              id: uuidv4(),
-              role: Role.MODEL,
-              content: welcomeMsg,
-              timestamp: new Date().toISOString()
-            }],
-            mode: finalMode,
-            timestamp: new Date().toISOString()
-          };
-
-          setChats(prev => [newChat, ...prev]);
-          setActiveChatId(newId);
-          setMessages(newChat.messages.map(m => ({...m, timestamp: new Date(m.timestamp)})));
-          
-          // Reset Gemini session
-          if (finalMode === 'homework') {
-             chatSessionRef.current = createHomeworkSession(grade, selectedStyle);
-          } else {
-             chatSessionRef.current = null; 
-          }
-          
-          setIsSidebarOpen(false);
-        };
-
-        const handleSelectChat = (chatId) => {
-          const chat = chats.find(c => c.id === chatId);
-          if (chat) {
-            setActiveChatId(chatId);
-            setMessages(chat.messages.map(m => ({...m, timestamp: new Date(m.timestamp)})));
-            setViewMode(chat.mode);
-            // Re-create session from history when loading chat
-            if (chat.mode === 'homework') {
-              const history = getHistoryFromMessages(chat.messages);
-              chatSessionRef.current = createHomeworkSession(grade, selectedStyle, history);
-            } else if (chat.mode === 'essay') {
-                // For essay, we need the profile, which is hidden in session. 
-                // Simplified: we just clear session for now and let user re-teach if needed 
-                // OR we assume standard config. 
-                // For this demo, let's just clear.
-                chatSessionRef.current = null; 
-            }
-            setIsSidebarOpen(false);
-          }
-        };
-
-        const updateActiveChatMessages = (newMessages) => {
-          setMessages(newMessages);
-          setChats(prev => prev.map(c => {
-             if (c.id === activeChatId) {
-               let title = c.title;
-               const lastMsg = newMessages[newMessages.length - 1];
-               if (c.title === "New Conversation" && lastMsg.role === Role.USER) {
-                 title = lastMsg.content.slice(0, 30) + (lastMsg.content.length > 30 ? "..." : "");
-               }
-               return { 
-                 ...c, 
-                 messages: newMessages.map(m => ({...m, timestamp: m.timestamp.toISOString()})), 
-                 title 
-               };
-             }
-             return c;
-          }));
-        };
-
-        const handleSendMessage = useCallback(async (text, image) => {
-          if (!activeChatId) createNewChat();
-
-          if (!chatSessionRef.current && viewMode === 'homework') {
-             chatSessionRef.current = createHomeworkSession(grade, selectedStyle);
-          }
-          
-          const userMsg = { 
-             id: uuidv4(), 
-             role: Role.USER, 
-             content: text, 
-             timestamp: new Date(), 
-             image,
-             userAvatar: user?.avatar
-          };
-          
-          const newMessages = [...messages, userMsg];
-          updateActiveChatMessages(newMessages);
-          setIsProcessing(true);
-
-          try {
-            let prompt = text;
-            if (viewMode === 'homework') {
-               prompt = `${getSystemInstruction(grade, selectedStyle, 'homework')}\n\nUSER: ${text}`;
-            }
-
-            const executeStream = async () => {
-                return await sendMessageStream(chatSessionRef.current, prompt, image);
-            }
-
-            let stream;
-            try {
-                stream = await executeStream();
-            } catch(e) {
-                if (isRateLimitError(e)) {
-                    rotateApiKey();
-                    // Recover session
-                    const history = getHistoryFromMessages(messages); // Use history up to last success
-                    
-                    if (viewMode === 'homework') {
-                        chatSessionRef.current = createHomeworkSession(grade, selectedStyle, history);
-                    } else if (viewMode === 'essay') {
-                        chatSessionRef.current = createCustomSession("", grade, history);
-                    }
-                    
-                    stream = await executeStream(); // Retry with new key/session
-                } else {
-                    throw e;
+            <div className="space-y-3 mb-8">
+              {question.options.map((opt, idx) => {
+                let stateClass = 'bg-gray-800 border-gray-700 hover:bg-gray-750';
+                if (selectedAnswer !== null) {
+                  if (idx === question.correctAnswerIndex) stateClass = 'bg-green-900/40 border-green-500 text-green-100';
+                  else if (idx === selectedAnswer) stateClass = 'bg-red-900/40 border-red-500 text-red-100';
+                  else stateClass = 'bg-gray-900/50 border-gray-800 text-gray-500';
                 }
-            }
 
-            const modelMsgId = uuidv4();
-            const initialModelMsg = { id: modelMsgId, role: Role.MODEL, content: '', timestamp: new Date(), isStreaming: true };
-            
-            updateActiveChatMessages([...newMessages, initialModelMsg]);
-
-            let fullContent = '';
-            for await (const chunk of stream) {
-               if (chunk.text) {
-                 fullContent += chunk.text;
-                 setMessages(current => current.map(m => m.id === modelMsgId ? {...m, content: fullContent} : m));
-               }
-            }
-            
-            setMessages(current => {
-               const final = current.map(m => m.id === modelMsgId ? {...m, content: fullContent, isStreaming: false} : m);
-               setChats(prev => prev.map(c => c.id === activeChatId ? {...c, messages: final.map(f => ({...f, timestamp: f.timestamp.toISOString()}))} : c));
-               return final;
-            });
-
-          } catch (e) {
-            console.error(e);
-            setMessages(prev => [...prev, {
-                id: uuidv4(),
-                role: Role.MODEL,
-                content: "I'm having trouble connecting right now. Please wait a moment and try again.",
-                timestamp: new Date(),
-                isError: true
-            }]);
-          } finally {
-            setIsProcessing(false);
-          }
-        }, [messages, activeChatId, chats, grade, selectedStyle, viewMode, user]);
-
-        // Essay Mode Handler
-        const handleEssayAnalyze = async (samples) => {
-            try {
-                const result = await analyzeWritingStyle(samples);
-                chatSessionRef.current = createCustomSession(result, grade);
-                // Store profile in chat metadata if we were doing robust persistence
-                
-                const modelMsg = {
-                id: uuidv4(),
-                role: Role.MODEL,
-                content: `**Style Learned.** I am now YAI, mimicking your writing style for Grade ${grade}. What shall we write?`,
-                timestamp: new Date()
-                };
-                const updated = [...messages, modelMsg];
-                updateActiveChatMessages(updated);
-            } catch (e) {
-                console.error(e);
-                alert("Failed to analyze style. Please try again.");
-            }
-        };
-
-        return (
-          <div className="flex h-screen overflow-hidden">
-            {viewMode !== 'quiz' && (
-               <Sidebar 
-               isOpen={isSidebarOpen} 
-               onClose={() => setIsSidebarOpen(false)}
-               chats={chats}
-               activeChatId={activeChatId}
-               onSelectChat={handleSelectChat}
-               onNewChat={() => createNewChat(viewMode)}
-               activeView={viewMode}
-               />
-            )}
-
-            <div className={`flex-1 flex flex-col min-w-0 bg-[#020617] relative ${viewMode !== 'quiz' ? 'md:ml-64' : ''} transition-all duration-300`}>
-               {/* Header */}
-               <header className="h-16 border-b border-gray-800 flex items-center justify-between px-4 bg-gray-950/80 backdrop-blur-md sticky top-0 z-10">
-                  <div className="flex items-center gap-3">
-                     {viewMode !== 'quiz' && <button onClick={() => setIsSidebarOpen(true)} className="md:hidden text-gray-400"><Menu/></button>}
-                     
-                     {/* Simplified Logo for Mobile/Desktop */}
-                     <div className="flex items-center gap-2">
-                        <div className="bg-gradient-to-br from-brand-600 to-blue-600 p-1.5 rounded-lg hidden sm:block">
-                           <GraduationCap className="text-white h-5 w-5" />
-                        </div>
-                        <h1 className="font-bold text-gray-100 hidden sm:block">YAI</h1>
-                     </div>
-
-                     <div className="flex bg-gray-900/50 p-1 rounded-xl border border-gray-800 ml-2">
-                        <button onClick={() => { setViewMode('homework'); if(!activeChatId) createNewChat('homework'); }} className={`px-3 py-1.5 rounded-lg text-xs md:text-sm font-medium transition-all ${viewMode === 'homework' ? 'bg-gray-800 text-white' : 'text-gray-400'}`}>Homework</button>
-                        <button onClick={() => { setViewMode('essay'); if(!activeChatId && viewMode !== 'essay') createNewChat('essay'); }} className={`px-3 py-1.5 rounded-lg text-xs md:text-sm font-medium transition-all ${viewMode === 'essay' ? 'bg-brand-900/30 text-brand-100' : 'text-gray-400'}`}>Essay</button>
-                        <button onClick={() => setViewMode('quiz')} className={`px-3 py-1.5 rounded-lg text-xs md:text-sm font-medium transition-all flex items-center gap-1 ${viewMode === 'quiz' ? 'bg-blue-900/30 text-blue-100' : 'text-gray-400'}`}><BrainCircuit size={14}/> Quiz</button>
-                     </div>
-                  </div>
-                  
-                  <div className="flex items-center gap-2">
-                     <span className="text-xs text-gray-500 hidden sm:inline">Grade:</span>
-                     <div className="relative">
-                        <select 
-                           value={grade} 
-                           onChange={(e) => { setGrade(e.target.value); chatSessionRef.current = null; }}
-                           className="bg-gray-900 border border-gray-700 text-white text-sm rounded-lg focus:ring-brand-500 focus:border-brand-500 block w-full p-2 appearance-none pl-3 pr-8"
-                        >
-                           {[8,9,10,11,12].map(g => <option key={g} value={g}>{g}th Grade</option>)}
-                        </select>
-                        <ChevronDown className="absolute right-2 top-2.5 text-gray-500 pointer-events-none" size={14} />
-                     </div>
-                  </div>
-               </header>
-
-               {/* Content Area */}
-               <main className="flex-1 overflow-hidden relative flex flex-col">
-                  {viewMode === 'quiz' ? (
-                     <QuizMode grade={grade} />
-                  ) : (
-                     <>
-                        <div className="flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6 scroll-smooth">
-                           <div className="max-w-4xl mx-auto flex flex-col justify-end min-h-full">
-                              {!activeChatId && createNewChat(viewMode)}
-                              
-                              {messages.length === 0 && viewMode === 'essay' && (
-                                 <EssaySetup onAnalyze={handleEssayAnalyze} />
-                              )}
-                              
-                              {messages.map(msg => <MessageBubble key={msg.id} message={msg} />)}
-                              
-                              {isProcessing && <div className="flex w-full mb-6 justify-start"><div className="flex items-center gap-2 text-gray-500 text-sm italic"><span className="w-2 h-2 bg-brand-500 rounded-full animate-pulse"></span>YAI is thinking...</div></div>}
-                              <div ref={messagesEndRef} className="h-4" />
-                           </div>
-                        </div>
-
-                        {/* Input */}
-                        {(viewMode === 'homework' || (viewMode === 'essay' && messages.length > 0)) && (
-                           <ChatInput 
-                              onSend={handleSendMessage} 
-                              disabled={isProcessing} 
-                              showStyles={viewMode === 'homework'}
-                              selectedStyle={selectedStyle}
-                              onStyleChange={setSelectedStyle}
-                              placeholder={viewMode === 'essay' ? "Write essay..." : "Ask YAI..."}
-                           />
-                        )}
-                     </>
-                  )}
-               </main>
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => !showExplanation && handleAnswer(idx)}
+                    disabled={showExplanation}
+                    className={`w-full text-left p-4 rounded-xl border transition-all ${stateClass} ${!showExplanation && 'hover:scale-[1.01] active:scale-[0.99]'}`}
+                  >
+                    <div className="flex items-center">
+                       <span className="w-8 h-8 rounded-full bg-black/20 flex items-center justify-center mr-3 text-sm font-mono opacity-70">
+                         {String.fromCharCode(65 + idx)}
+                       </span>
+                       {opt}
+                    </div>
+                  </button>
+                );
+              })}
             </div>
+
+            {showExplanation && (
+              <div className="bg-brand-900/20 border border-brand-500/30 p-4 rounded-xl animate-fadeIn">
+                 <div className="flex items-center gap-2 mb-2 text-brand-300 font-bold text-sm">
+                    <Bot size={16} /> AI Explanation
+                 </div>
+                 <p className="text-gray-300 text-sm">{question.explanation}</p>
+                 <button onClick={nextQuestion} className="mt-4 w-full py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-lg font-bold">
+                    {currentIndex < quizData.length - 1 ? 'Next Question' : 'Finish Quiz'}
+                 </button>
+              </div>
+            )}
           </div>
         );
       };
 
-      // Helper Component for Essay Setup
-      const EssaySetup = ({ onAnalyze }) => {
-          const [text, setText] = useState('');
-          const [isAnalyzing, setIsAnalyzing] = useState(false);
-          return (
-             <div className="bg-gray-900/50 border border-gray-800 rounded-2xl p-6 md:p-10 text-center max-w-2xl mx-auto my-auto">
-                <div className="inline-flex items-center justify-center p-3 bg-brand-600 rounded-2xl mb-4 shadow-lg shadow-brand-900/40">
-                   <PenTool className="text-white h-8 w-8" />
+      // Header Component
+      const Header = ({ currentView, onViewChange, grade, onGradeChange }) => {
+        return (
+          <header className="sticky top-0 z-10 backdrop-blur-md bg-gray-950/80 border-b border-gray-800">
+            <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+              
+              <div className="flex items-center gap-3">
+                <div className="bg-gradient-to-br from-indigo-600 to-violet-600 p-2 rounded-xl shadow-lg shadow-indigo-900/20">
+                  <GraduationCap className="text-white h-5 w-5" />
                 </div>
-                <h2 className="text-2xl font-bold text-white mb-2">Teach YAI Your Style</h2>
-                <p className="text-gray-400 mb-6">Paste a few paragraphs of your writing. YAI will analyze your sentence structure and errors to write exactly like you.</p>
-                <textarea 
-                   value={text} onChange={e => setText(e.target.value)} 
-                   className="w-full h-48 bg-gray-950 border border-gray-800 rounded-xl p-4 text-gray-200 focus:ring-2 focus:ring-brand-500/50 outline-none resize-none mb-4"
-                   placeholder="Paste your old essays here..."
-                />
-                <button 
-                   onClick={async () => { setIsAnalyzing(true); await onAnalyze(text); setIsAnalyzing(false); }}
-                   disabled={text.length < 50 || isAnalyzing}
-                   className="w-full bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold py-3 rounded-xl transition-all"
-                >
-                   {isAnalyzing ? "Analyzing..." : "Start Essay Mode"}
-                </button>
+                <h1 className="font-bold text-gray-100 text-lg md:text-xl tracking-tight hidden md:block">YAI <span className="text-brand-400 font-normal">Study Helper</span></h1>
+              </div>
+              
+              <div className="flex bg-gray-900/80 p-1 rounded-xl border border-gray-800 overflow-x-auto custom-scrollbar max-w-[60vw] md:max-w-none">
+                  <button
+                      onClick={() => onViewChange('homework')}
+                      className={`flex items-center gap-2 px-3 md:px-4 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+                          currentView === 'homework'
+                          ? 'bg-gray-800 text-white shadow-sm border border-gray-700'
+                          : 'text-gray-400 hover:text-gray-200'
+                      }`}
+                  >
+                      <BookOpen size={16} />
+                      <span className="hidden md:inline">Homework</span>
+                  </button>
+                  <button
+                      onClick={() => onViewChange('essay')}
+                      className={`flex items-center gap-2 px-3 md:px-4 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+                          currentView === 'essay'
+                          ? 'bg-purple-900/30 text-purple-100 shadow-sm border border-purple-500/30'
+                          : 'text-gray-400 hover:text-gray-200'
+                      }`}
+                  >
+                      <PenTool size={16} />
+                      <span className="hidden md:inline">Essay</span>
+                  </button>
+                  <button
+                      onClick={() => onViewChange('quiz')}
+                      className={`flex items-center gap-2 px-3 md:px-4 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+                          currentView === 'quiz'
+                          ? 'bg-indigo-900/30 text-indigo-100 shadow-sm border border-indigo-500/30'
+                          : 'text-gray-400 hover:text-gray-200'
+                      }`}
+                  >
+                      <BrainCircuit size={16} />
+                      <span className="hidden md:inline">Quiz</span>
+                  </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                 <span className="text-xs text-gray-500 font-medium hidden md:inline">GRADE</span>
+                 <select 
+                   value={grade} 
+                   onChange={(e) => onGradeChange(Number(e.target.value))}
+                   className="bg-gray-900 border border-gray-700 text-gray-300 text-sm rounded-lg focus:ring-brand-500 focus:border-brand-500 block p-1.5 px-2 font-bold outline-none cursor-pointer hover:bg-gray-800 transition-colors"
+                 >
+                   <option value={8}>8</option>
+                   <option value={9}>9</option>
+                   <option value={10}>10</option>
+                   <option value={11}>11</option>
+                   <option value={12}>12</option>
+                 </select>
+              </div>
+            </div>
+          </header>
+        );
+      };
+
+      const TypingIndicator = () => (
+        <div className="flex w-full mb-6 justify-start">
+          <div className="flex max-w-[85%] md:max-w-[75%] gap-3 flex-row">
+            <div className="flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center bg-emerald-600 animate-pulse">
+              <div className="h-2 w-2 bg-white rounded-full" />
+            </div>
+            <div className="flex items-center">
+               <span className="text-sm text-gray-400 italic">Thinking...</span>
+            </div>
+          </div>
+        </div>
+      );
+
+      // HomeworkChat Component
+      const HomeworkChat = ({ grade }) => {
+        const [messages, setMessages] = useState([]);
+        const [isProcessing, setIsProcessing] = useState(false);
+        const [style, setStyle] = useState('simple');
+        const chatSessionRef = useRef(null);
+        const messagesEndRef = useRef(null);
+
+        useEffect(() => {
+          startNewChat();
+        }, []); // Only runs once on mount/remount
+
+        const scrollToBottom = () => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        };
+
+        useEffect(() => {
+          scrollToBottom();
+        }, [messages, isProcessing]);
+
+        const startNewChat = () => {
+          try {
+            chatSessionRef.current = createHomeworkSession(grade, style);
+            setMessages([
+              {
+                id: uuidv4(),
+                role: 'model',
+                content: `Hi! I'm YAI. 👋\n\nI'm set to **Grade ${grade}** level. Pick a style below and ask me anything!`,
+                timestamp: new Date(),
+              }
+            ]);
+          } catch (error) {
+            console.error("Failed to initialize chat", error);
+          }
+        };
+
+        const handleSendMessage = useCallback(async (text, image) => {
+          if (!chatSessionRef.current || (!text.trim() && !image)) return;
+
+          const userMessageId = uuidv4();
+          const modelMessageId = uuidv4();
+
+          const userMessage = {
+            id: userMessageId,
+            role: 'user',
+            content: text,
+            image: image,
+            timestamp: new Date(),
+          };
+
+          setMessages(prev => [...prev, userMessage]);
+          setIsProcessing(true);
+
+          // Re-inject system instruction for style changes dynamically
+          // Note: Gemini doesn't support changing system instruction mid-chat easily without new session,
+          // so we prepend the style instruction to the prompt.
+          const styleInstruction = 
+            style === 'simple' ? "(Explain simply, 8th grade level)" :
+            style === 'steps' ? "(Break this down step-by-step)" :
+            "(Explain this visually with metaphors)";
+            
+          const fullPrompt = `${styleInstruction} ${text}`;
+
+          try {
+            const stream = await sendMessageStream(chatSessionRef.current, fullPrompt, image);
+            
+            const initialModelMessage = {
+              id: modelMessageId,
+              role: 'model',
+              content: '',
+              timestamp: new Date(),
+              isStreaming: true,
+            };
+
+            setMessages(prev => [...prev, initialModelMessage]);
+
+            let fullContent = '';
+
+            for await (const chunk of stream) {
+              const textChunk = chunk.text; // Correct SDK usage: chunk.text
+              
+              if (textChunk) {
+                fullContent += textChunk;
+                setMessages(prev => 
+                  prev.map(msg => 
+                    msg.id === modelMessageId 
+                      ? { ...msg, content: fullContent } 
+                      : msg
+                  )
+                );
+              }
+            }
+
+            setMessages(prev => 
+              prev.map(msg => 
+                msg.id === modelMessageId 
+                  ? { ...msg, isStreaming: false } 
+                  : msg
+              )
+            );
+
+          } catch (error) {
+            console.error("Streaming error:", error);
+            // If API key error, the global handler might catch it, or we handle here
+            if (isRateLimitError(error)) {
+                 setMessages(prev => [...prev, {
+                    id: uuidv4(),
+                    role: 'model',
+                    content: "**Network busy (429) or Quota Exceeded. Please try again later.**",
+                    timestamp: new Date(),
+                    isError: true
+                 }]);
+            } else {
+                 setMessages(prev => [...prev, {
+                    id: modelMessageId,
+                    role: 'model',
+                    content: "Sorry, I encountered an error. Please try again.",
+                    timestamp: new Date(),
+                    isError: true,
+                    isStreaming: false
+                }]);
+            }
+          } finally {
+            setIsProcessing(false);
+          }
+        }, [style]);
+
+        return (
+          <div className="flex flex-col h-full relative">
+             <div className="absolute top-4 right-4 z-20">
+               <button 
+                 onClick={() => { if(confirm('Clear chat?')) startNewChat(); }}
+                 className="p-2 bg-gray-800/80 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-full transition-all border border-gray-700"
+               >
+                 <Trash2 size={16} />
+               </button>
              </div>
-          );
-      }
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6 scroll-smooth">
+              <div className="max-w-4xl mx-auto flex flex-col justify-end min-h-full">
+                {messages.map((msg) => (
+                  <MessageBubble key={msg.id} message={msg} />
+                ))}
+                {isProcessing && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
+                  <TypingIndicator />
+                )}
+                <div ref={messagesEndRef} className="h-4" />
+              </div>
+            </div>
+            <ChatInput 
+                onSend={(text, img) => handleSendMessage(text, img)} 
+                disabled={isProcessing} 
+                selectedStyle={style}
+                onStyleChange={setStyle}
+            />
+          </div>
+        );
+      };
+
+      // EssayMimic Component
+      const EssayMimic = ({ grade }) => {
+        const [step, setStep] = useState('input');
+        const [samples, setSamples] = useState('');
+        const [isAnalyzing, setIsAnalyzing] = useState(false);
+        const [styleProfile, setStyleProfile] = useState('');
+        
+        const [messages, setMessages] = useState([]);
+        const [isProcessing, setIsProcessing] = useState(false);
+        const chatSessionRef = useRef(null);
+        const messagesEndRef = useRef(null);
+
+        useEffect(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, [messages, isProcessing]);
+
+        const handleAnalyze = async () => {
+            if (!samples.trim()) return;
+            setIsAnalyzing(true);
+            try {
+            const result = await analyzeWritingStyle(samples);
+            if (result) {
+                setStyleProfile(result);
+                chatSessionRef.current = createCustomSession(result, grade);
+                setMessages([
+                    {
+                    id: uuidv4(),
+                    role: 'model',
+                    content: "**Style Learned!** 🧬\n\nI have analyzed your writing. I know your sentence rhythm, your vocabulary, and even your common grammar quirks.\n\nTell me what to write, and I'll write it *as you*.",
+                    timestamp: new Date(),
+                    }
+                ]);
+                setStep('chat');
+            }
+            } catch (error) {
+            console.error("Analysis failed", error);
+            alert("Analysis failed. Try again.");
+            } finally {
+            setIsAnalyzing(false);
+            }
+        };
+
+        const handleReset = () => {
+            if (confirm("Forget this style?")) {
+            setStep('input');
+            setSamples('');
+            setStyleProfile('');
+            setMessages([]);
+            chatSessionRef.current = null;
+            }
+        };
+
+        const handleSendMessage = useCallback(async (text) => {
+            if (!chatSessionRef.current || !text.trim()) return;
+
+            const userMessageId = uuidv4();
+            const modelMessageId = uuidv4();
+
+            setMessages(prev => [...prev, {
+            id: userMessageId,
+            role: 'user',
+            content: text,
+            timestamp: new Date()
+            }]);
+
+            setIsProcessing(true);
+
+            try {
+            const stream = await sendMessageStream(chatSessionRef.current, text);
+            
+            const initialModelMessage = {
+                id: modelMessageId,
+                role: 'model',
+                content: '',
+                timestamp: new Date(),
+                isStreaming: true,
+            };
+
+            setMessages(prev => [...prev, initialModelMessage]);
+
+            let fullContent = '';
+            for await (const chunk of stream) {
+                const textChunk = chunk.text;
+                if (textChunk) {
+                fullContent += textChunk;
+                setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, content: fullContent } : msg));
+                }
+            }
+            
+            setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isStreaming: false } : msg));
+
+            } catch (error) {
+             if (isRateLimitError(error)) {
+                 setMessages(prev => [...prev, {
+                    id: uuidv4(),
+                    role: 'model',
+                    content: "**Network busy (429). Please send your message again later.**",
+                    timestamp: new Date(),
+                    isError: true
+                 }]);
+            }
+            } finally {
+            setIsProcessing(false);
+            }
+        }, []);
+
+        if (step === 'input') {
+            return (
+            <div className="max-w-3xl mx-auto p-6 md:p-12 flex flex-col h-full overflow-y-auto">
+                <div className="text-center mb-8">
+                <div className="inline-flex items-center justify-center p-3 bg-purple-600 rounded-2xl mb-4 shadow-lg shadow-purple-900/40">
+                    <PenTool className="text-white h-8 w-8" />
+                </div>
+                <h2 className="text-3xl font-bold text-gray-100 mb-2">Essay Mimic (Anti-AI)</h2>
+                <p className="text-gray-400 max-w-lg mx-auto">
+                    Paste your own writing. YAI will learn to replicate your "human" errors, sentence variety, and tone to bypass detection.
+                </p>
+                </div>
+
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl mb-6">
+                    <label className="block text-sm font-medium text-gray-300 mb-2 flex items-center gap-2">
+                        <Sparkles size={16} className="text-yellow-500" />
+                        Paste 3-4 paragraphs of YOUR writing:
+                    </label>
+                    <textarea 
+                        value={samples}
+                        onChange={(e) => setSamples(e.target.value)}
+                        placeholder="I think that history is kinda boring usually but..."
+                        className="w-full h-64 bg-gray-950 border border-gray-800 rounded-xl p-4 text-gray-200 focus:ring-2 focus:ring-purple-500/50 outline-none resize-none custom-scrollbar leading-relaxed"
+                    />
+                </div>
+
+                <button
+                    onClick={handleAnalyze}
+                    disabled={isAnalyzing || samples.length < 20}
+                    className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg transition-all flex items-center justify-center gap-2 ${
+                        isAnalyzing || samples.length < 20 
+                        ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white transform hover:scale-[1.01]'
+                    }`}
+                >
+                    {isAnalyzing ? <RefreshCw className="animate-spin" /> : "Analyze & Mimic"}
+                </button>
+            </div>
+            );
+        }
+
+        return (
+            <div className="flex flex-col h-full relative">
+            <div className="absolute top-4 right-4 z-20 flex gap-2">
+                <div className="hidden md:flex items-center gap-2 bg-gray-900/90 border border-purple-500/30 px-3 py-1.5 rounded-full backdrop-blur-sm">
+                        <Check size={14} className="text-green-400" />
+                        <span className="text-xs text-purple-200 font-medium">Style Active</span>
+                </div>
+                <button onClick={handleReset} className="p-2 bg-gray-800/80 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-full border border-gray-700">
+                    <Trash2 size={16} />
+                </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6 scroll-smooth">
+                <div className="max-w-4xl mx-auto flex flex-col justify-end min-h-full">
+                {messages.map((msg) => (
+                    <MessageBubble key={msg.id} message={msg} />
+                ))}
+                {isProcessing && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
+                     <TypingIndicator />
+                )}
+                <div ref={messagesEndRef} className="h-4" />
+                </div>
+            </div>
+            
+            <ChatInput 
+                onSend={(text) => handleSendMessage(text)} 
+                disabled={isProcessing} 
+                showStyles={false}
+                placeholder="What should I write? (I'll use your style)"
+            />
+            </div>
+        );
+      };
+
+      // App Component
+      const App = () => {
+        const [currentView, setCurrentView] = useState('homework');
+        const [grade, setGrade] = useState(8);
+
+        return (
+          <div className="flex flex-col h-screen bg-gray-950 text-gray-100 font-sans selection:bg-indigo-500/30">
+            <Header 
+                currentView={currentView} 
+                onViewChange={setCurrentView} 
+                grade={grade} 
+                onGradeChange={setGrade} 
+            />
+
+            <main className="flex-1 overflow-hidden relative">
+              {currentView === 'homework' && <HomeworkChat grade={grade} />}
+              {currentView === 'essay' && <EssayMimic grade={grade} />}
+              {currentView === 'quiz' && <QuizMode grade={grade} />}
+            </main>
+          </div>
+        );
+      };
 
       const root = createRoot(document.getElementById('root'));
       root.render(<App />);
