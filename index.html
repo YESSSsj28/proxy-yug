@@ -1,1 +1,1120 @@
 
+<!DOCTYPE html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>YAI Study Helper</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              gray: {
+                750: '#2d3748',
+                850: '#1a202c',
+                950: '#0d1117',
+              },
+              brand: {
+                50: '#f5f3ff',
+                100: '#ede9fe',
+                200: '#ddd6fe',
+                300: '#c4b5fd',
+                400: '#a78bfa',
+                500: '#8b5cf6', // Violet
+                600: '#7c3aed',
+                700: '#6d28d9',
+                800: '#5b21b6',
+                900: '#4c1d95',
+                950: '#2e1065',
+              }
+            },
+            animation: {
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'bounce-slight': 'bounce 1s infinite',
+              'fadeIn': 'fadeIn 0.3s ease-out forwards',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0', transform: 'translateY(10px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' },
+              }
+            }
+          },
+        },
+      }
+    </script>
+    <style>
+      /* Custom scrollbar for Webkit */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #111827; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #374151; 
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #4b5563; 
+      }
+      body {
+        background-color: #020617; /* Very dark slate/blue */
+        color: #f3f4f6;
+      }
+      .markdown-body p { margin-bottom: 0.75em; }
+      .markdown-body ul { list-style-type: disc; margin-left: 1.5em; margin-bottom: 0.75em; }
+      .markdown-body ol { list-style-type: decimal; margin-left: 1.5em; margin-bottom: 0.75em; }
+      .markdown-body pre { background: #1e1b4b; padding: 1em; border-radius: 0.5em; overflow-x: auto; margin-bottom: 0.75em; border: 1px solid #4338ca; }
+      .markdown-body code { font-family: monospace; }
+      .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+      .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+      .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(139, 92, 246, 0.3); border-radius: 3px; }
+      .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(139, 92, 246, 0.5); }
+    </style>
+    <!-- Babel for in-browser JSX compilation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0",
+    "react-markdown": "https://esm.sh/react-markdown@9.0.1?deps=react@18.2.0",
+    "uuid": "https://esm.sh/uuid@9.0.1",
+    "@google/genai": "https://esm.sh/@google/genai",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.1/",
+    "react/": "https://esm.sh/react@^19.2.1/"
+  }
+}
+</script>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+      import React, { useState, useEffect, useRef, useCallback } from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { 
+        Bot, User, AlertCircle, Send, Loader2, Baby, ListOrdered, 
+        Image as ImageIcon, GraduationCap, BookOpen, PenTool, 
+        Sparkles, AlertTriangle, Check, RefreshCw, Trash2, Paperclip, X,
+        Menu, LogOut, MessageSquare, Plus, Settings, ChevronDown, UserCircle,
+        BrainCircuit, Play, HelpCircle, ArrowRight, RotateCcw, Download,
+        Palette
+      } from 'lucide-react';
+      import ReactMarkdown from 'react-markdown';
+      import { v4 as uuidv4 } from 'uuid';
+      import { GoogleGenAI } from '@google/genai';
+
+      // --- CONFIGURATION ---
+      // Primary API Key
+      const API_KEY = "AIzaSyCqSoTa0HkUCvA6pU36kqnY1Y5lW2AFbEs";
+      
+      let ai = new GoogleGenAI({ apiKey: API_KEY });
+
+      const isRateLimitError = (error) => {
+        const msg = error?.message || '';
+        const status = error?.status;
+        return msg.includes('429') || status === 429 || msg.includes('Quota exceeded') || msg.includes('RESOURCE_EXHAUSTED');
+      };
+
+      // --- GEMINI SERVICE ---
+      
+      const getSystemInstruction = (grade, style, mode = 'homework') => {
+        if (mode === 'essay') {
+          return ""; 
+        }
+
+        let base = `You are "YAI", a personalized AI Study Helper designed to help students in Grade ${grade}. 
+        If asked "Who made you?", respond EXACTLY with: "**I was made by YAI's team.**"
+        When asked "what model are you", say "I am YAI, your personal study assistant." Do NOT say you are Gemini or Google.
+        
+        Your goal is to adapt your explanation style strictly based on the user's request. 
+        Always maintain a supportive, encouraging, and educational tone suitable for a Grade ${grade} student.
+        Use Markdown for formatting.`;
+
+        if (style === 'simple') {
+          base += `\n\nSTYLE: SIMPLE. Explain concepts using language appropriate for Grade ${grade}. Avoid unnecessary jargon. Use analogies.`;
+        } else if (style === 'steps') {
+          base += `\n\nSTYLE: STEP-BY-STEP. Break everything down into numbered logical steps. Be a patient tutor.`;
+        } else if (style === 'visual') {
+          base += `\n\nSTYLE: VISUAL. Use vivid descriptions, ASCII diagrams, and spatial analogies to help the student visualize the concept.`;
+        }
+
+        return base;
+      };
+
+      const createHomeworkSession = (grade, style, history = []) => {
+        return ai.chats.create({
+          model: 'gemini-2.5-flash',
+          config: {
+            systemInstruction: getSystemInstruction(grade, style, 'homework'),
+            temperature: 0.7,
+            topK: 40,
+          },
+          history: history
+        });
+      };
+
+      const analyzeWritingStyle = async (samples) => {
+        const prompt = `
+          Analyze the following writing samples to create a 'Human Writing Profile' designed SPECIFICALLY to bypass AI detection.
+          
+          Detectors flag:
+          1. **Artificial Simplicity**: Simple Subject-Verb-Object sentences.
+          2. **Speculative Focus**: Words like "implies", "suggests".
+          3. **Predictable Rhythm**: Monotone sentence lengths.
+
+          Analyze the user's text for:
+          1. **Sentence Variety**: Run-ons? Fragments?
+          2. **Messiness**: Backtracking? ("well, actually...").
+          3. **Vocabulary**: Slang? Vague words?
+
+          SAMPLES:
+          "${samples}"
+
+          OUTPUT FORMAT:
+          Return a strict System Instruction for an LLM. 
+          Start with: "You are YAI acting as a writing proxy. To ensure the text is undetectable as AI, you must adhere to these strict rules:"
+          
+          Explicitly list:
+          - **BREAK THE RHYTHM**: Mix long, complex sentences with fragments.
+          - **BAN "SPECULATIVE FOCUS"**: Ban "This implies", "In conclusion". 
+          - **BAN "ARTIFICIAL SIMPLICITY"**: Ban starting sentences with "It is".
+          - **FORCED ERRORS**: If the user has errors, replicate them.
+        `;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+        });
+        return response.text;
+      };
+
+      const createCustomSession = (styleProfile, grade, history = []) => {
+        const instruction = `${styleProfile}
+        
+        You are YAI.
+        Target Grade Level: ${grade}.
+
+        CRITICAL RULES FOR HUMANIZATION:
+        1. **NO "SPECULATIVE FOCUS"**: BANNED: "This implies that...", "This suggests...".
+        2. **DESTROY "ARTIFICIAL SIMPLICITY"**: NO Subject-Verb-Object repetition. Do not start sentences with "It is".
+        3. **BREAK "PREDICTABLE RHYTHM"**: Varied sentence lengths. Use run-on sentences mixed with fragments.
+        4. **ADD "HUMAN MESSINESS"**: Asides, fillers ("actually", "basically", "like").
+        5. **LOWERCASE**: If the style implies it, use lowercase for emphasis.
+        6. **VOCABULARY**: Use simple, utilitarian vocabulary. Avoid "delve", "tapestry", "moreover".
+        7. **IDENTITY**: If asked "Who made you?", say "**I was made by YAI's team.**"
+        
+        If the user asks for an essay, write it EXACTLY as this specific human would.
+        `;
+
+        return ai.chats.create({
+          model: 'gemini-2.5-flash',
+          config: {
+            systemInstruction: instruction,
+            temperature: 1.3,
+            topK: 80,
+            topP: 0.98,
+          },
+          history: history
+        });
+      };
+
+      const generateQuizData = async (topic, grade, weakAreas = null) => {
+        const prompt = `
+          You are a Quiz Generator for a Grade ${grade} student.
+          
+          USER REQUEST/TOPIC:
+          "${topic}"
+
+          ${weakAreas ? `FOCUS ON THESE WEAK AREAS: ${weakAreas}` : ''}
+
+          INSTRUCTIONS:
+          1. **QUANTITY CHECK**: Look for any number in the user's request (e.g., "10 questions", "make me 3", "20"). 
+             - If a number is found, generate EXACTLY that many questions.
+             - If NO number is found, default to exactly 5 questions.
+          2. **CONTENT**: 
+             - If input is raw notes, reword them into multiple-choice questions.
+             - If input is a general topic (e.g. "Lawyer"), generate aptitude/knowledge questions.
+          3. **FORMAT**:
+             - Provide 4 options per question (1 correct, 3 distractors).
+             - Provide a short "explanation" for the correct answer.
+
+          OUTPUT FORMAT:
+          Return ONLY a raw JSON array. Do not use Markdown code blocks.
+          [
+            {
+              "question": "string",
+              "options": ["string", "string", "string", "string"],
+              "correctAnswerIndex": number (0-3),
+              "explanation": "string"
+            }
+          ]
+        `;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+        });
+        let text = response.text.trim();
+        if (text.startsWith('```json')) text = text.replace(/^```json/, '').replace(/```$/, '');
+        if (text.startsWith('```')) text = text.replace(/^```/, '').replace(/```$/, '');
+        return JSON.parse(text);
+      };
+
+      const sendMessageStream = async (chat, messageText, imageData = null) => {
+        try {
+          let messagePayload;
+          
+          if (imageData) {
+            const base64Data = imageData.includes('base64,') 
+              ? imageData.split('base64,')[1] 
+              : imageData;
+            
+            messagePayload = {
+              parts: [
+                { text: messageText },
+                { inlineData: { mimeType: 'image/jpeg', data: base64Data } } 
+              ]
+            };
+            return await chat.sendMessageStream({ message: messagePayload.parts });
+          } else {
+            return await chat.sendMessageStream({ message: messageText });
+          }
+        } catch (error) {
+          console.error("Error sending message:", error);
+          throw error;
+        }
+      };
+
+      // --- COMPONENTS ---
+
+      // MessageBubble
+      const MessageBubble = ({ message }) => {
+        const isUser = message.role === 'user';
+        const isError = message.isError;
+
+        return (
+          <div className={`flex w-full mb-6 ${isUser ? 'justify-end' : 'justify-start'}`}>
+            <div className={`flex max-w-[85%] md:max-w-[75%] gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
+              
+              <div className={`flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center overflow-hidden ${
+                isUser ? 'bg-brand-600' : isError ? 'bg-red-500' : 'bg-gray-700'
+              }`}>
+                {isUser ? (
+                   message.userAvatar ? <img src={message.userAvatar} alt="Me" className="w-full h-full object-cover"/> : <User size={16} className="text-white" />
+                ) : isError ? (
+                  <AlertCircle size={16} className="text-white" />
+                ) : (
+                  <Bot size={16} className="text-brand-300" />
+                )}
+              </div>
+
+              <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+                {message.image && (
+                  <div className={`mb-2 rounded-lg overflow-hidden border border-gray-700 ${isUser ? 'rounded-tr-sm' : 'rounded-tl-sm'}`}>
+                    <img src={message.image} alt="User upload" className="max-w-full h-auto max-h-64 object-cover" />
+                  </div>
+                )}
+
+                <div
+                  className={`px-4 py-3 rounded-2xl shadow-sm text-sm md:text-base leading-relaxed overflow-hidden ${
+                    isUser
+                      ? 'bg-brand-600 text-white rounded-tr-sm'
+                      : isError
+                      ? 'bg-red-900/50 border border-red-800 text-red-200 rounded-tl-sm'
+                      : 'bg-gray-800 text-gray-100 border border-gray-700 rounded-tl-sm'
+                  }`}
+                >
+                  {isError ? (
+                     <span>{message.content}</span>
+                  ) : (
+                    <div className="markdown-body">
+                      <ReactMarkdown
+                        components={{
+                          code({ node, className, children, ...props }) {
+                            const match = /language-(\w+)/.exec(className || '');
+                            const isInline = !match && !String(children).includes('\n');
+                            if (isInline) {
+                               return <code className="bg-black/20 px-1 py-0.5 rounded font-mono text-xs" {...props}>{children}</code>;
+                            }
+                            return (
+                              <div className="relative my-2 overflow-hidden rounded-md bg-gray-950 border border-brand-900/50">
+                                 <div className="flex items-center justify-between px-3 py-1 bg-gray-900 border-b border-gray-800">
+                                    <span className="text-xs text-gray-400 font-mono lowercase">{match ? match[1] : 'code'}</span>
+                                 </div>
+                                 <pre className="p-3 overflow-x-auto text-sm font-mono text-gray-300">
+                                  <code className={className} {...props}>{children}</code>
+                                </pre>
+                              </div>
+                            );
+                          },
+                        }}
+                      >
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                  )}
+                  {message.isStreaming && <span className="inline-block w-2 h-4 ml-1 align-middle bg-brand-400 animate-pulse" />}
+                </div>
+                <span className="text-xs text-gray-500 mt-1 px-1">
+                  {message.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // ChatInput
+      const ChatInput = ({ onSend, disabled, showStyles = true, placeholder, selectedStyle, onStyleChange }) => {
+        const [text, setText] = useState('');
+        const [selectedImage, setSelectedImage] = useState(null);
+        const textareaRef = useRef(null);
+        const fileInputRef = useRef(null);
+
+        const adjustHeight = () => {
+          const textarea = textareaRef.current;
+          if (textarea) {
+            textarea.style.height = 'auto';
+            textarea.style.height = `${Math.min(textarea.scrollHeight, 150)}px`;
+          }
+        };
+
+        useEffect(() => { adjustHeight(); }, [text]);
+
+        const handleSubmit = () => {
+          if ((text.trim() || selectedImage) && !disabled) {
+            onSend(text.trim(), selectedImage);
+            setText('');
+            setSelectedImage(null);
+            if (textareaRef.current) textareaRef.current.style.height = 'auto';
+            if (fileInputRef.current) fileInputRef.current.value = '';
+          }
+        };
+
+        const handleKeyDown = (e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSubmit();
+          }
+        };
+
+        const handleFileChange = (e) => {
+          const file = e.target.files[0];
+          if (file) {
+            const reader = new FileReader();
+            reader.onloadend = () => setSelectedImage(reader.result);
+            reader.readAsDataURL(file);
+          }
+        };
+
+        const styles = [
+          { id: 'simple', label: 'Simple', icon: <Baby size={16} />, desc: 'Easy to understand' },
+          { id: 'steps', label: 'Steps', icon: <ListOrdered size={16} />, desc: 'Step-by-Step' },
+          { id: 'visual', label: 'Visual', icon: <ImageIcon size={16} />, desc: 'Imagery & Diagrams' },
+        ];
+
+        return (
+          <div className="w-full bg-[#0d1117] border-t border-gray-800 p-4 pb-6 md:pb-8">
+            <div className="max-w-4xl mx-auto space-y-3">
+              {showStyles && (
+                <div className="flex gap-2 overflow-x-auto pb-2 custom-scrollbar">
+                  {styles.map((style) => (
+                    <button
+                      key={style.id}
+                      onClick={() => onStyleChange(style.id)}
+                      disabled={disabled}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all border ${
+                        selectedStyle === style.id
+                          ? 'bg-brand-600 border-brand-500 text-white shadow-md shadow-brand-900/20'
+                          : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-750 hover:border-gray-600'
+                      }`}
+                    >
+                      {style.icon}
+                      <div className="flex flex-col items-start">
+                        <span className="leading-none">{style.label}</span>
+                        <span className="text-[10px] opacity-70 font-normal leading-none mt-0.5">{style.desc}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {selectedImage && (
+                <div className="relative inline-block mb-2">
+                  <img src={selectedImage} alt="Preview" className="h-20 w-20 object-cover rounded-lg border border-gray-600" />
+                  <button 
+                    onClick={() => { setSelectedImage(null); if(fileInputRef.current) fileInputRef.current.value = ''; }}
+                    className="absolute -top-2 -right-2 bg-gray-700 text-white rounded-full p-1 hover:bg-red-500 transition-colors shadow-sm"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+
+              <div className="relative flex items-end gap-2 bg-gray-800 p-2 rounded-2xl border border-gray-700 shadow-lg focus-within:ring-2 focus-within:ring-brand-500/50 focus-within:border-brand-500 transition-all">
+                <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
+                <button onClick={() => fileInputRef.current?.click()} disabled={disabled} className={`p-3 rounded-xl transition-colors ${selectedImage ? 'text-brand-400 bg-brand-900/20' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-700'}`}>
+                  <Paperclip size={20} />
+                </button>
+
+                <textarea
+                  ref={textareaRef}
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={placeholder || "Ask YAI..."}
+                  disabled={disabled}
+                  rows={1}
+                  className="w-full bg-transparent text-gray-100 placeholder-gray-500 text-base p-3 resize-none focus:outline-none max-h-[150px] overflow-y-auto custom-scrollbar disabled:opacity-50"
+                  style={{ minHeight: '48px' }}
+                />
+                <button
+                  onClick={handleSubmit}
+                  disabled={(!text.trim() && !selectedImage) || disabled}
+                  className={`p-3 rounded-xl flex-shrink-0 transition-all duration-200 ${
+                    (text.trim() || selectedImage) && !disabled
+                      ? 'bg-brand-600 text-white hover:bg-brand-500 shadow-lg hover:scale-105 active:scale-95'
+                      : 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                  }`}
+                >
+                  {disabled ? <Loader2 className="animate-spin" size={20} /> : <Send size={20} />}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // Quiz Mode Component
+      const QuizMode = ({ grade }) => {
+        const [step, setStep] = useState('input'); // input, loading, quiz, results
+        const [inputTopic, setInputTopic] = useState('');
+        const [quizData, setQuizData] = useState([]);
+        const [currentIndex, setCurrentIndex] = useState(0);
+        const [score, setScore] = useState(0);
+        const [showExplanation, setShowExplanation] = useState(false);
+        const [selectedAnswer, setSelectedAnswer] = useState(null); // index
+        const [history, setHistory] = useState([]); // Track wrong answers for retry
+
+        const handleGenerate = async (topic, weakAreas = null) => {
+          setStep('loading');
+          try {
+            const data = await generateQuizData(topic, grade, weakAreas);
+            setQuizData(data);
+            setCurrentIndex(0);
+            setScore(0);
+            setShowExplanation(false);
+            setSelectedAnswer(null);
+            setHistory([]);
+            setStep('quiz');
+          } catch (error) {
+            console.error(error);
+            setStep('input');
+            alert("Failed to generate quiz. Please try again.");
+          }
+        };
+
+        const handleAnswer = (index) => {
+          setSelectedAnswer(index);
+          setShowExplanation(true);
+          const isCorrect = index === quizData[currentIndex].correctAnswerIndex;
+          if (isCorrect) setScore(s => s + 1);
+          else {
+            setHistory(h => [...h, quizData[currentIndex].question]);
+          }
+        };
+
+        const nextQuestion = () => {
+          if (currentIndex < quizData.length - 1) {
+            setCurrentIndex(c => c + 1);
+            setSelectedAnswer(null);
+            setShowExplanation(false);
+          } else {
+            setStep('results');
+          }
+        };
+
+        if (step === 'input') {
+          return (
+            <div className="max-w-2xl mx-auto p-6 md:p-12">
+              <div className="text-center mb-8">
+                <div className="inline-flex items-center justify-center p-3 bg-indigo-600 rounded-2xl mb-4 shadow-lg shadow-indigo-900/40">
+                  <BrainCircuit className="text-white h-8 w-8" />
+                </div>
+                <h2 className="text-3xl font-bold text-gray-100 mb-2">Quiz Generator</h2>
+                <p className="text-gray-400">Paste your notes, a topic, or what you want to be (e.g., "Lawyer"). YAI will create a custom quiz for you.</p>
+              </div>
+              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl mb-6">
+                 <textarea
+                    value={inputTopic}
+                    onChange={(e) => setInputTopic(e.target.value)}
+                    placeholder="E.g., 'Grass is green, rocks erode' or 'Make me a quiz on 8th grade Biology'..."
+                    className="w-full h-40 bg-gray-950 border border-gray-800 rounded-xl p-4 text-gray-200 focus:ring-2 focus:ring-indigo-500/50 outline-none resize-none"
+                 />
+              </div>
+              <button
+                onClick={() => handleGenerate(inputTopic)}
+                disabled={!inputTopic.trim()}
+                className="w-full py-4 rounded-xl font-bold text-lg bg-brand-600 hover:bg-brand-500 text-white shadow-lg transition-transform hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Generate Quiz
+              </button>
+            </div>
+          );
+        }
+
+        if (step === 'loading') {
+          return (
+            <div className="flex flex-col items-center justify-center h-full">
+              <div className="relative">
+                <BrainCircuit size={64} className="text-brand-500 animate-pulse" />
+                <div className="absolute inset-0 bg-brand-500/20 blur-xl rounded-full animate-pulse-slow"></div>
+              </div>
+              <p className="mt-6 text-xl font-bold text-gray-200 animate-bounce-slight">Building your Quiz...</p>
+              <p className="text-sm text-gray-500 mt-2">Rewording questions & creating distractors</p>
+            </div>
+          );
+        }
+
+        if (step === 'results') {
+          return (
+            <div className="max-w-md mx-auto p-8 text-center h-full flex flex-col justify-center">
+               <h2 className="text-4xl font-bold text-white mb-2">Quiz Complete!</h2>
+               <div className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-brand-400 to-indigo-400 my-6">
+                 {score}/{quizData.length}
+               </div>
+               <p className="text-gray-400 mb-8">
+                 {score === quizData.length ? "Perfect Score! You're a genius! 🌟" : "Good effort! Keep practicing."}
+               </p>
+               
+               <div className="space-y-3">
+                 {score < quizData.length && (
+                    <button
+                        onClick={() => handleGenerate(inputTopic, history.join(', '))}
+                        className="w-full py-3 rounded-xl font-bold bg-indigo-600 hover:bg-indigo-500 text-white"
+                    >
+                        Practice Weaknesses
+                    </button>
+                 )}
+                 <button
+                    onClick={() => { setStep('input'); setInputTopic(''); }}
+                    className="w-full py-3 rounded-xl font-bold bg-gray-800 hover:bg-gray-700 text-gray-300"
+                 >
+                    New Quiz
+                 </button>
+               </div>
+            </div>
+          );
+        }
+
+        // Quiz Step
+        const question = quizData[currentIndex];
+        return (
+          <div className="max-w-2xl mx-auto p-4 md:p-8 flex flex-col h-full justify-center">
+            <div className="mb-6 flex justify-between items-center text-gray-500 text-sm font-medium">
+               <span>Question {currentIndex + 1} of {quizData.length}</span>
+               <span className="bg-gray-800 px-3 py-1 rounded-full">Score: {score}</span>
+            </div>
+
+            <h3 className="text-2xl font-bold text-white mb-8 leading-snug">{question.question}</h3>
+
+            <div className="space-y-3 mb-8">
+              {question.options.map((opt, idx) => {
+                let stateClass = 'bg-gray-800 border-gray-700 hover:bg-gray-750';
+                if (selectedAnswer !== null) {
+                  if (idx === question.correctAnswerIndex) stateClass = 'bg-green-900/40 border-green-500 text-green-100';
+                  else if (idx === selectedAnswer) stateClass = 'bg-red-900/40 border-red-500 text-red-100';
+                  else stateClass = 'bg-gray-900/50 border-gray-800 text-gray-500';
+                }
+
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => !showExplanation && handleAnswer(idx)}
+                    disabled={showExplanation}
+                    className={`w-full text-left p-4 rounded-xl border transition-all ${stateClass} ${!showExplanation && 'hover:scale-[1.01] active:scale-[0.99]'}`}
+                  >
+                    <div className="flex items-center">
+                       <span className="w-8 h-8 rounded-full bg-black/20 flex items-center justify-center mr-3 text-sm font-mono opacity-70">
+                         {String.fromCharCode(65 + idx)}
+                       </span>
+                       {opt}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {showExplanation && (
+              <div className="bg-brand-900/20 border border-brand-500/30 p-4 rounded-xl animate-fadeIn">
+                 <div className="flex items-center gap-2 mb-2 text-brand-300 font-bold text-sm">
+                    <Bot size={16} /> AI Explanation
+                 </div>
+                 <p className="text-gray-300 text-sm">{question.explanation}</p>
+                 <button onClick={nextQuestion} className="mt-4 w-full py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-lg font-bold">
+                    {currentIndex < quizData.length - 1 ? 'Next Question' : 'Finish Quiz'}
+                 </button>
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      // Header Component
+      const Header = ({ currentView, onViewChange, grade, onGradeChange }) => {
+        return (
+          <header className="sticky top-0 z-10 backdrop-blur-md bg-gray-950/80 border-b border-gray-800">
+            <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
+              
+              <div className="flex items-center gap-3">
+                <div className="bg-gradient-to-br from-indigo-600 to-violet-600 p-2 rounded-xl shadow-lg shadow-indigo-900/20">
+                  <GraduationCap className="text-white h-5 w-5" />
+                </div>
+                <h1 className="font-bold text-gray-100 text-lg md:text-xl tracking-tight hidden md:block">YAI <span className="text-brand-400 font-normal">Study Helper</span></h1>
+              </div>
+              
+              <div className="flex bg-gray-900/80 p-1 rounded-xl border border-gray-800 overflow-x-auto custom-scrollbar max-w-[60vw] md:max-w-none">
+                  <button
+                      onClick={() => onViewChange('homework')}
+                      className={`flex items-center gap-2 px-3 md:px-4 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+                          currentView === 'homework'
+                          ? 'bg-gray-800 text-white shadow-sm border border-gray-700'
+                          : 'text-gray-400 hover:text-gray-200'
+                      }`}
+                  >
+                      <BookOpen size={16} />
+                      <span className="hidden md:inline">Homework</span>
+                  </button>
+                  <button
+                      onClick={() => onViewChange('essay')}
+                      className={`flex items-center gap-2 px-3 md:px-4 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+                          currentView === 'essay'
+                          ? 'bg-purple-900/30 text-purple-100 shadow-sm border border-purple-500/30'
+                          : 'text-gray-400 hover:text-gray-200'
+                      }`}
+                  >
+                      <PenTool size={16} />
+                      <span className="hidden md:inline">Essay</span>
+                  </button>
+                  <button
+                      onClick={() => onViewChange('quiz')}
+                      className={`flex items-center gap-2 px-3 md:px-4 py-1.5 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
+                          currentView === 'quiz'
+                          ? 'bg-indigo-900/30 text-indigo-100 shadow-sm border border-indigo-500/30'
+                          : 'text-gray-400 hover:text-gray-200'
+                      }`}
+                  >
+                      <BrainCircuit size={16} />
+                      <span className="hidden md:inline">Quiz</span>
+                  </button>
+              </div>
+
+              <div className="flex items-center gap-2">
+                 <span className="text-xs text-gray-500 font-medium hidden md:inline">GRADE</span>
+                 <select 
+                   value={grade} 
+                   onChange={(e) => onGradeChange(Number(e.target.value))}
+                   className="bg-gray-900 border border-gray-700 text-gray-300 text-sm rounded-lg focus:ring-brand-500 focus:border-brand-500 block p-1.5 px-2 font-bold outline-none cursor-pointer hover:bg-gray-800 transition-colors"
+                 >
+                   <option value={8}>8</option>
+                   <option value={9}>9</option>
+                   <option value={10}>10</option>
+                   <option value={11}>11</option>
+                   <option value={12}>12</option>
+                 </select>
+              </div>
+            </div>
+          </header>
+        );
+      };
+
+      const TypingIndicator = () => (
+        <div className="flex w-full mb-6 justify-start">
+          <div className="flex max-w-[85%] md:max-w-[75%] gap-3 flex-row">
+            <div className="flex-shrink-0 h-8 w-8 rounded-full flex items-center justify-center bg-emerald-600 animate-pulse">
+              <div className="h-2 w-2 bg-white rounded-full" />
+            </div>
+            <div className="flex items-center">
+               <span className="text-sm text-gray-400 italic">Thinking...</span>
+            </div>
+          </div>
+        </div>
+      );
+
+      // HomeworkChat Component
+      const HomeworkChat = ({ grade }) => {
+        const [messages, setMessages] = useState([]);
+        const [isProcessing, setIsProcessing] = useState(false);
+        const [style, setStyle] = useState('simple');
+        const chatSessionRef = useRef(null);
+        const messagesEndRef = useRef(null);
+
+        useEffect(() => {
+          startNewChat();
+        }, []); // Only runs once on mount/remount
+
+        const scrollToBottom = () => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        };
+
+        useEffect(() => {
+          scrollToBottom();
+        }, [messages, isProcessing]);
+
+        const startNewChat = () => {
+          try {
+            chatSessionRef.current = createHomeworkSession(grade, style);
+            setMessages([
+              {
+                id: uuidv4(),
+                role: 'model',
+                content: `Hi! I'm YAI. 👋\n\nI'm set to **Grade ${grade}** level. Pick a style below and ask me anything!`,
+                timestamp: new Date(),
+              }
+            ]);
+          } catch (error) {
+            console.error("Failed to initialize chat", error);
+          }
+        };
+
+        const handleSendMessage = useCallback(async (text, image) => {
+          if (!chatSessionRef.current || (!text.trim() && !image)) return;
+
+          const userMessageId = uuidv4();
+          const modelMessageId = uuidv4();
+
+          const userMessage = {
+            id: userMessageId,
+            role: 'user',
+            content: text,
+            image: image,
+            timestamp: new Date(),
+          };
+
+          setMessages(prev => [...prev, userMessage]);
+          setIsProcessing(true);
+
+          // Re-inject system instruction for style changes dynamically
+          // Note: Gemini doesn't support changing system instruction mid-chat easily without new session,
+          // so we prepend the style instruction to the prompt.
+          const styleInstruction = 
+            style === 'simple' ? "(Explain simply, 8th grade level)" :
+            style === 'steps' ? "(Break this down step-by-step)" :
+            "(Explain this visually with metaphors)";
+            
+          const fullPrompt = `${styleInstruction} ${text}`;
+
+          try {
+            const stream = await sendMessageStream(chatSessionRef.current, fullPrompt, image);
+            
+            const initialModelMessage = {
+              id: modelMessageId,
+              role: 'model',
+              content: '',
+              timestamp: new Date(),
+              isStreaming: true,
+            };
+
+            setMessages(prev => [...prev, initialModelMessage]);
+
+            let fullContent = '';
+
+            for await (const chunk of stream) {
+              const textChunk = chunk.text; // Correct SDK usage: chunk.text
+              
+              if (textChunk) {
+                fullContent += textChunk;
+                setMessages(prev => 
+                  prev.map(msg => 
+                    msg.id === modelMessageId 
+                      ? { ...msg, content: fullContent } 
+                      : msg
+                  )
+                );
+              }
+            }
+
+            setMessages(prev => 
+              prev.map(msg => 
+                msg.id === modelMessageId 
+                  ? { ...msg, isStreaming: false } 
+                  : msg
+              )
+            );
+
+          } catch (error) {
+            console.error("Streaming error:", error);
+            // If API key error, the global handler might catch it, or we handle here
+            if (isRateLimitError(error)) {
+                 setMessages(prev => [...prev, {
+                    id: uuidv4(),
+                    role: 'model',
+                    content: "**Network busy (429) or Quota Exceeded. Please try again later.**",
+                    timestamp: new Date(),
+                    isError: true
+                 }]);
+            } else {
+                 setMessages(prev => [...prev, {
+                    id: modelMessageId,
+                    role: 'model',
+                    content: "Sorry, I encountered an error. Please try again.",
+                    timestamp: new Date(),
+                    isError: true,
+                    isStreaming: false
+                }]);
+            }
+          } finally {
+            setIsProcessing(false);
+          }
+        }, [style]);
+
+        return (
+          <div className="flex flex-col h-full relative">
+             <div className="absolute top-4 right-4 z-20">
+               <button 
+                 onClick={() => { if(confirm('Clear chat?')) startNewChat(); }}
+                 className="p-2 bg-gray-800/80 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-full transition-all border border-gray-700"
+               >
+                 <Trash2 size={16} />
+               </button>
+             </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6 scroll-smooth">
+              <div className="max-w-4xl mx-auto flex flex-col justify-end min-h-full">
+                {messages.map((msg) => (
+                  <MessageBubble key={msg.id} message={msg} />
+                ))}
+                {isProcessing && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
+                  <TypingIndicator />
+                )}
+                <div ref={messagesEndRef} className="h-4" />
+              </div>
+            </div>
+            <ChatInput 
+                onSend={(text, img) => handleSendMessage(text, img)} 
+                disabled={isProcessing} 
+                selectedStyle={style}
+                onStyleChange={setStyle}
+            />
+          </div>
+        );
+      };
+
+      // EssayMimic Component
+      const EssayMimic = ({ grade }) => {
+        const [step, setStep] = useState('input');
+        const [samples, setSamples] = useState('');
+        const [isAnalyzing, setIsAnalyzing] = useState(false);
+        const [styleProfile, setStyleProfile] = useState('');
+        
+        const [messages, setMessages] = useState([]);
+        const [isProcessing, setIsProcessing] = useState(false);
+        const chatSessionRef = useRef(null);
+        const messagesEndRef = useRef(null);
+
+        useEffect(() => {
+            messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }, [messages, isProcessing]);
+
+        const handleAnalyze = async () => {
+            if (!samples.trim()) return;
+            setIsAnalyzing(true);
+            try {
+            const result = await analyzeWritingStyle(samples);
+            if (result) {
+                setStyleProfile(result);
+                chatSessionRef.current = createCustomSession(result, grade);
+                setMessages([
+                    {
+                    id: uuidv4(),
+                    role: 'model',
+                    content: "**Style Learned!** 🧬\n\nI have analyzed your writing. I know your sentence rhythm, your vocabulary, and even your common grammar quirks.\n\nTell me what to write, and I'll write it *as you*.",
+                    timestamp: new Date(),
+                    }
+                ]);
+                setStep('chat');
+            }
+            } catch (error) {
+            console.error("Analysis failed", error);
+            alert("Analysis failed. Try again.");
+            } finally {
+            setIsAnalyzing(false);
+            }
+        };
+
+        const handleReset = () => {
+            if (confirm("Forget this style?")) {
+            setStep('input');
+            setSamples('');
+            setStyleProfile('');
+            setMessages([]);
+            chatSessionRef.current = null;
+            }
+        };
+
+        const handleSendMessage = useCallback(async (text) => {
+            if (!chatSessionRef.current || !text.trim()) return;
+
+            const userMessageId = uuidv4();
+            const modelMessageId = uuidv4();
+
+            setMessages(prev => [...prev, {
+            id: userMessageId,
+            role: 'user',
+            content: text,
+            timestamp: new Date()
+            }]);
+
+            setIsProcessing(true);
+
+            try {
+            const stream = await sendMessageStream(chatSessionRef.current, text);
+            
+            const initialModelMessage = {
+                id: modelMessageId,
+                role: 'model',
+                content: '',
+                timestamp: new Date(),
+                isStreaming: true,
+            };
+
+            setMessages(prev => [...prev, initialModelMessage]);
+
+            let fullContent = '';
+            for await (const chunk of stream) {
+                const textChunk = chunk.text;
+                if (textChunk) {
+                fullContent += textChunk;
+                setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, content: fullContent } : msg));
+                }
+            }
+            
+            setMessages(prev => prev.map(msg => msg.id === modelMessageId ? { ...msg, isStreaming: false } : msg));
+
+            } catch (error) {
+             if (isRateLimitError(error)) {
+                 setMessages(prev => [...prev, {
+                    id: uuidv4(),
+                    role: 'model',
+                    content: "**Network busy (429). Please send your message again later.**",
+                    timestamp: new Date(),
+                    isError: true
+                 }]);
+            }
+            } finally {
+            setIsProcessing(false);
+            }
+        }, []);
+
+        if (step === 'input') {
+            return (
+            <div className="max-w-3xl mx-auto p-6 md:p-12 flex flex-col h-full overflow-y-auto">
+                <div className="text-center mb-8">
+                <div className="inline-flex items-center justify-center p-3 bg-purple-600 rounded-2xl mb-4 shadow-lg shadow-purple-900/40">
+                    <PenTool className="text-white h-8 w-8" />
+                </div>
+                <h2 className="text-3xl font-bold text-gray-100 mb-2">Essay Mimic (Anti-AI)</h2>
+                <p className="text-gray-400 max-w-lg mx-auto">
+                    Paste your own writing. YAI will learn to replicate your "human" errors, sentence variety, and tone to bypass detection.
+                </p>
+                </div>
+
+                <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 shadow-xl mb-6">
+                    <label className="block text-sm font-medium text-gray-300 mb-2 flex items-center gap-2">
+                        <Sparkles size={16} className="text-yellow-500" />
+                        Paste 3-4 paragraphs of YOUR writing:
+                    </label>
+                    <textarea 
+                        value={samples}
+                        onChange={(e) => setSamples(e.target.value)}
+                        placeholder="I think that history is kinda boring usually but..."
+                        className="w-full h-64 bg-gray-950 border border-gray-800 rounded-xl p-4 text-gray-200 focus:ring-2 focus:ring-purple-500/50 outline-none resize-none custom-scrollbar leading-relaxed"
+                    />
+                </div>
+
+                <button
+                    onClick={handleAnalyze}
+                    disabled={isAnalyzing || samples.length < 20}
+                    className={`w-full py-4 rounded-xl font-bold text-lg shadow-lg transition-all flex items-center justify-center gap-2 ${
+                        isAnalyzing || samples.length < 20 
+                        ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
+                        : 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white transform hover:scale-[1.01]'
+                    }`}
+                >
+                    {isAnalyzing ? <RefreshCw className="animate-spin" /> : "Analyze & Mimic"}
+                </button>
+            </div>
+            );
+        }
+
+        return (
+            <div className="flex flex-col h-full relative">
+            <div className="absolute top-4 right-4 z-20 flex gap-2">
+                <div className="hidden md:flex items-center gap-2 bg-gray-900/90 border border-purple-500/30 px-3 py-1.5 rounded-full backdrop-blur-sm">
+                        <Check size={14} className="text-green-400" />
+                        <span className="text-xs text-purple-200 font-medium">Style Active</span>
+                </div>
+                <button onClick={handleReset} className="p-2 bg-gray-800/80 hover:bg-red-500/20 text-gray-400 hover:text-red-400 rounded-full border border-gray-700">
+                    <Trash2 size={16} />
+                </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto custom-scrollbar p-4 md:p-6 scroll-smooth">
+                <div className="max-w-4xl mx-auto flex flex-col justify-end min-h-full">
+                {messages.map((msg) => (
+                    <MessageBubble key={msg.id} message={msg} />
+                ))}
+                {isProcessing && messages.length > 0 && messages[messages.length - 1].role === 'user' && (
+                     <TypingIndicator />
+                )}
+                <div ref={messagesEndRef} className="h-4" />
+                </div>
+            </div>
+            
+            <ChatInput 
+                onSend={(text) => handleSendMessage(text)} 
+                disabled={isProcessing} 
+                showStyles={false}
+                placeholder="What should I write? (I'll use your style)"
+            />
+            </div>
+        );
+      };
+
+      // App Component
+      const App = () => {
+        const [currentView, setCurrentView] = useState('homework');
+        const [grade, setGrade] = useState(8);
+
+        return (
+          <div className="flex flex-col h-screen bg-gray-950 text-gray-100 font-sans selection:bg-indigo-500/30">
+            <Header 
+                currentView={currentView} 
+                onViewChange={setCurrentView} 
+                grade={grade} 
+                onGradeChange={setGrade} 
+            />
+
+            <main className="flex-1 overflow-hidden relative">
+              {currentView === 'homework' && <HomeworkChat grade={grade} />}
+              {currentView === 'essay' && <EssayMimic grade={grade} />}
+              {currentView === 'quiz' && <QuizMode grade={grade} />}
+            </main>
+          </div>
+        );
+      };
+
+      const root = createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
